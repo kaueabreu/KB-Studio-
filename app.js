@@ -70,10 +70,14 @@ async function showApp() {
     state.projects = await db.fetchProjects();
     renderShell();
     await renderTab();
-    db.subscribeToChanges(async () => {
-      state.projects = await db.fetchProjects();
-      renderTab();
-    });
+    try {
+      db.subscribeToChanges(async () => {
+        state.projects = await db.fetchProjects();
+        renderTab();
+      });
+    } catch (rtErr) {
+      console.error("Realtime subscribe falhou (nao critico):", rtErr);
+    }
   } catch (err) {
     console.error(err);
     app.innerHTML = `
@@ -214,7 +218,13 @@ async function renderTab() {
     el.dataset.rendered = "1";
   } catch (err) {
     console.error(err);
-    el.innerHTML = `<p class="empty-state">Erro ao carregar dados. Tente novamente.</p>`;
+    el.innerHTML = `
+      <div class="empty-state" style="text-align:left; max-width:520px; margin:20px auto;">
+        <p style="color:var(--text-primary);">Erro ao carregar dados desta aba.</p>
+        <p style="background:var(--surface-2); padding:10px; border-radius:8px; font-family:monospace; font-size:11px; white-space:pre-wrap; word-break:break-word; color:var(--text-primary);">${escapeHtml(err.message || String(err))}</p>
+        <button class="primary" onclick="window.location.reload()">Tentar de novo</button>
+      </div>
+    `;
   }
   updateBell();
 }

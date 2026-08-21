@@ -19,11 +19,18 @@ export async function getSession() {
 }
 
 // ---------- Realtime ----------
+let realtimeChannel = null;
 export function subscribeToChanges(onChange) {
-  sb.channel("kb-realtime")
-    .on("postgres_changes", { event: "*", schema: "public", table: "entries" }, onChange)
-    .on("postgres_changes", { event: "*", schema: "public", table: "projects" }, onChange)
-    .on("postgres_changes", { event: "*", schema: "public", table: "goals" }, onChange)
+  if (realtimeChannel) return; // ja inscrito nesta sessao, evita assinar duas vezes
+  let timer = null;
+  const debounced = () => {
+    clearTimeout(timer);
+    timer = setTimeout(onChange, 400);
+  };
+  realtimeChannel = sb.channel("kb-realtime")
+    .on("postgres_changes", { event: "*", schema: "public", table: "entries" }, debounced)
+    .on("postgres_changes", { event: "*", schema: "public", table: "projects" }, debounced)
+    .on("postgres_changes", { event: "*", schema: "public", table: "goals" }, debounced)
     .subscribe();
 }
 
