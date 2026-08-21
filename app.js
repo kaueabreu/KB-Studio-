@@ -11,11 +11,11 @@ const state = {
   session: null,
   tab: "dashboard", // dashboard | despesas | receber | projetos | rts | relatorios
   despesasSub: "payable", // payable | variable
-  relatoriosSub: "dre", // dre | anual
+  rtsView: "month", // month | open
   dreScope: "consolidado", // consolidado | projeto
   dreProjectId: null,
   date: new Date(), // mes/ano corrente para telas mensais
-  year: new Date().getFullYear(), // ano corrente para visao anual
+  year: new Date().getFullYear(), // ano corrente do balanco anual (no dashboard)
   projects: [],
   currentProjectId: null,
   bellOpen: false,
@@ -66,13 +66,25 @@ function showAuth() {
 async function showApp() {
   auth.classList.add("hidden");
   app.classList.remove("hidden");
-  state.projects = await db.fetchProjects();
-  renderShell();
-  await renderTab();
-  db.subscribeToChanges(async () => {
+  try {
     state.projects = await db.fetchProjects();
-    renderTab();
-  });
+    renderShell();
+    await renderTab();
+    db.subscribeToChanges(async () => {
+      state.projects = await db.fetchProjects();
+      renderTab();
+    });
+  } catch (err) {
+    console.error(err);
+    app.innerHTML = `
+      <div style="max-width:520px; margin:60px auto; padding:24px; font-size:14px; line-height:1.6;">
+        <h2 style="margin:0 0 12px;">Não consegui carregar os dados</h2>
+        <p style="color:var(--text-secondary, #666);">Isso geralmente acontece quando o SQL ainda não foi rodado no Supabase, ou as tabelas não existem ainda.</p>
+        <p style="background:#f2f2f2; padding:12px; border-radius:8px; font-family:monospace; font-size:12px; white-space:pre-wrap; word-break:break-word;">${escapeHtml(err.message || String(err))}</p>
+        <button class="primary" onclick="window.location.reload()">Tentar de novo</button>
+      </div>
+    `;
+  }
 }
 
 document.getElementById("loginForm").addEventListener("submit", async (e) => {
@@ -82,7 +94,7 @@ document.getElementById("loginForm").addEventListener("submit", async (e) => {
   const errorEl = document.getElementById("authError");
   errorEl.textContent = "";
   const { error } = await db.signIn(email, password);
-  if (error) errorEl.textContent = "E-mail ou senha invalidos.";
+  if (error) errorEl.textContent = "E-mail ou senha inválidos.";
 });
 
 // ---------------- Shell (topbar + tabs) ----------------
@@ -98,7 +110,7 @@ function renderShell() {
       </div>
       <div class="topbar-actions">
         <button id="themeToggleBtn" class="icon-btn" aria-label="Alternar tema"></button>
-        <button id="bellBtn" class="icon-btn" aria-label="Notificacoes" style="position:relative;">
+        <button id="bellBtn" class="icon-btn" aria-label="Notificações" style="position:relative;">
           ${icons.bell}
           <span id="bellCount" class="badge-count hidden">0</span>
         </button>
@@ -112,7 +124,7 @@ function renderShell() {
       ${tabButton("receber", "Contas a receber")}
       ${tabButton("projetos", "Projetos")}
       ${tabButton("rts", "RTs")}
-      ${tabButton("relatorios", "Relatorios")}
+      ${tabButton("relatorios", "DRE")}
     </nav>
     <main id="tabContent"></main>
     <div id="modalRoot"></div>
@@ -177,8 +189,8 @@ async function updateBell() {
   }
 
   panelEl.innerHTML = `
-    <h3>Pendencias</h3>
-    ${alerts.length === 0 ? `<p class="bell-empty">Nenhuma pendencia no momento.</p>` : alerts.slice(0, 12).map((e) => {
+    <h3>Pendências</h3>
+    ${alerts.length === 0 ? `<p class="bell-empty">Nenhuma pendência no momento.</p>` : alerts.slice(0, 12).map((e) => {
       const status = computeStatus(e);
       const color = status === "atrasado" ? "var(--text-danger)" : "var(--text-warning)";
       return `<div class="bell-item"><span>${escapeHtml(e.description)}</span><span style="color:${color}">${status}</span></div>`;
@@ -189,7 +201,9 @@ async function updateBell() {
 // ---------------- Tab router ----------------
 async function renderTab() {
   const el = document.getElementById("tabContent");
-  el.innerHTML = `<p class="empty-state">Carregando...</p>`;
+  if (!el.dataset.rendered) {
+    el.innerHTML = `<p class="empty-state">Carregando...</p>`;
+  }
   try {
     if (state.tab === "dashboard") await renderDashboard(el);
     else if (state.tab === "despesas") await renderDespesas(el);
@@ -197,6 +211,7 @@ async function renderTab() {
     else if (state.tab === "projetos") await renderProjetos(el);
     else if (state.tab === "rts") await renderRTs(el);
     else if (state.tab === "relatorios") await renderRelatorios(el);
+    el.dataset.rendered = "1";
   } catch (err) {
     console.error(err);
     el.innerHTML = `<p class="empty-state">Erro ao carregar dados. Tente novamente.</p>`;
@@ -209,9 +224,9 @@ function periodNavHtml() {
   const label = `${MONTH_NAMES[state.date.getMonth()]} ${state.date.getFullYear()}`;
   return `
     <div class="period-nav">
-      <button class="icon-btn" id="prevMonthBtn" aria-label="Mes anterior">${icons.chevronLeft}</button>
+      <button class="icon-btn" id="prevMonthBtn" aria-label="Mês anterior">${icons.chevronLeft}</button>
       <span>${label}</span>
-      <button class="icon-btn" id="nextMonthBtn" aria-label="Proximo mes">${icons.chevronRight}</button>
+      <button class="icon-btn" id="nextMonthBtn" aria-label="Próximo mês">${icons.chevronRight}</button>
     </div>
   `;
 }
@@ -236,7 +251,7 @@ function buildDonut(entriesList) {
   });
   const entries = Object.entries(totals).sort((a, b) => b[1] - a[1]).slice(0, 5);
   const total = entries.reduce((a, [, v]) => a + v, 0);
-  if (total === 0) return { style: "background: var(--surface-2);", legend: `<p class="bell-empty">Sem dados</p>` };
+  if (total === 0) return { style: "background: var(--surface-2);", legend: `<p class="bell-empty">Sem dados</p>`, titleText: "Sem lançamentos neste período" };
   let acc = 0;
   const stops = entries.map(([label, v], i) => {
     const start = (acc / total) * 100;
@@ -247,7 +262,8 @@ function buildDonut(entriesList) {
   const legend = entries.map(([label], i) => `
     <div class="legend-item"><span class="legend-dot" style="background:${PALETTE[i % PALETTE.length]}"></span>${escapeHtml(label)}</div>
   `).join("");
-  return { style: `background: conic-gradient(${stops.join(", ")});`, legend };
+  const titleText = entries.map(([label, v]) => `${label}: ${formatMoney(v)}`).join("\n");
+  return { style: `background: conic-gradient(${stops.join(", ")});`, legend, titleText };
 }
 
 // ---------------- DASHBOARD ----------------
@@ -260,48 +276,123 @@ async function renderDashboard(el) {
   const receitaTotal = sum(receitaEntries);
   const despesaTotal = sum(despesaEntries);
   const saldo = receitaTotal - despesaTotal;
-  const faltaReceber = sum(receitaEntries.filter((e) => !e.paid));
-  const faltaPagar = sum(despesaEntries.filter((e) => !e.paid));
 
   const totalMovimento = receitaTotal + despesaTotal;
   const pagoRecebido = sum(receitaEntries.filter((e) => e.paid)) + sum(despesaEntries.filter((e) => e.paid));
   const progress = totalMovimento > 0 ? Math.round((pagoRecebido / totalMovimento) * 100) : 0;
 
-  const despesaDonut = buildDonut(despesaEntries);
-  const receitaDonut = buildDonut(receitaEntries);
-
   const today = todayStr();
   const atencao = entries.filter((e) => !e.paid && (
     ((e.type === "payable" || e.type === "variable") && e.due_date <= today) ||
     ((e.type === "receivable" || e.type === "rt") && e.due_date < today)
-  )).sort((a, b) => a.due_date.localeCompare(b.due_date)).slice(0, 6);
+  )).sort((a, b) => a.due_date.localeCompare(b.due_date)).slice(0, 8);
+
+  // ---- Balanco anual ----
+  const year = state.year;
+  const monthsData = [];
+  for (let m = 0; m < 12; m++) {
+    const { from: f2, to: t2 } = monthRange(year, m);
+    const monthEntries = await db.fetchEntriesInRange(f2, t2);
+    monthsData.push({
+      recebido: sum(monthEntries.filter((e) => e.type === "receivable" || e.type === "rt")),
+      pago: sum(monthEntries.filter((e) => e.type === "payable" || e.type === "variable")),
+    });
+  }
+  const totalRecebidoAno = monthsData.reduce((a, m) => a + m.recebido, 0);
+  const totalPagoAno = monthsData.reduce((a, m) => a + m.pago, 0);
+  const maxVal = Math.max(1, ...monthsData.flatMap((m) => [m.recebido, m.pago]));
+
+  const now = new Date();
+  const isCurrentYear = year === now.getFullYear();
+  const currentMonthIdx = now.getMonth();
+  const ymKey = yearMonthKey(year, currentMonthIdx);
+  let goal = null;
+  try { goal = await db.fetchGoal(ymKey); } catch { goal = null; }
+  const target = goal?.target_amount || 0;
+  let receivedThisMonth = 0;
+  if (isCurrentYear) {
+    const { from: f3, to: t3 } = monthRange(year, currentMonthIdx);
+    const curEntries = await db.fetchEntriesInRange(f3, t3);
+    receivedThisMonth = sum(curEntries.filter((e) => (e.type === "receivable" || e.type === "rt") && e.paid));
+  }
+  const pct = target > 0 ? Math.round((receivedThisMonth / target) * 100) : 0;
 
   el.innerHTML = `
     ${periodNavHtml()}
-    <div class="metrics-row cols-5" style="margin-top:14px;">
+    <div class="metrics-row cols-3" style="margin-top:14px;">
       <div class="metric-card"><p class="label">Receita</p><p class="value">${formatMoneyShort(receitaTotal)}</p></div>
       <div class="metric-card"><p class="label">Despesas</p><p class="value">${formatMoneyShort(despesaTotal)}</p></div>
       <div class="metric-card"><p class="label">Saldo</p><p class="value ${saldo >= 0 ? "success" : "danger"}">${formatMoneyShort(saldo)}</p></div>
-      <div class="metric-card"><p class="label">Falta receber</p><p class="value">${formatMoneyShort(faltaReceber)}</p></div>
-      <div class="metric-card"><p class="label">Falta pagar</p><p class="value">${formatMoneyShort(faltaPagar)}</p></div>
     </div>
     <div class="panel">
       <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
-        <p style="font-size:13px; color:var(--text-secondary); margin:0;">Pago e recebido no mes</p>
+        <p style="font-size:13px; color:var(--text-secondary); margin:0;">Pago e recebido no mês</p>
         <p style="font-size:13px; font-weight:700; margin:0;">${progress}%</p>
       </div>
       <div class="progress-track"><div class="progress-fill" style="width:${progress}%;"></div></div>
     </div>
-    <div class="charts-row">
-      <div class="chart-card"><p class="title">Despesas por categoria</p><div class="donut" style="${despesaDonut.style}"></div><div class="legend">${despesaDonut.legend}</div></div>
-      <div class="chart-card"><p class="title">Receita por categoria</p><div class="donut" style="${receitaDonut.style}"></div><div class="legend">${receitaDonut.legend}</div></div>
-    </div>
+
     <div class="panel">
-      <h3>Atencao agora</h3>
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+        <h3 style="margin:0;">Balanço anual</h3>
+        <div class="period-nav" style="gap:6px;">
+          <button class="icon-btn" id="prevYearBtn" aria-label="Ano anterior">${icons.chevronLeft}</button>
+          <span style="font-size:13px; font-weight:600; min-width:auto;">${year}</span>
+          <button class="icon-btn" id="nextYearBtn" aria-label="Próximo ano">${icons.chevronRight}</button>
+        </div>
+      </div>
+      <div class="metrics-row cols-3" style="margin-bottom:14px;">
+        <div class="metric-card"><p class="label">Recebido no ano</p><p class="value">${formatMoneyShort(totalRecebidoAno)}</p></div>
+        <div class="metric-card"><p class="label">Pago no ano</p><p class="value">${formatMoneyShort(totalPagoAno)}</p></div>
+        <div class="metric-card"><p class="label">Saldo acumulado</p><p class="value ${totalRecebidoAno - totalPagoAno >= 0 ? "success" : "danger"}">${formatMoneyShort(totalRecebidoAno - totalPagoAno)}</p></div>
+      </div>
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+        <p style="font-size:12px; color:var(--text-secondary); margin:0;">Recebido vs pago por mês</p>
+        <div style="display:flex; gap:10px; font-size:11px; color:var(--text-secondary);">
+          <span><span class="legend-dot" style="background:var(--accent-fg); display:inline-block;"></span> Recebido</span>
+          <span><span class="legend-dot" style="background:var(--border-strong); display:inline-block;"></span> Pago</span>
+        </div>
+      </div>
+      <div class="bars">
+        ${monthsData.map((m, i) => `
+          <div class="bar-col ${isCurrentYear && i === currentMonthIdx ? "current" : ""}">
+            <div class="bar-pair">
+              <div class="bar income" style="height:${Math.max(2, (m.recebido / maxVal) * 100)}%"></div>
+              <div class="bar expense" style="height:${Math.max(2, (m.pago / maxVal) * 100)}%"></div>
+            </div>
+            <span>${MONTH_NAMES[i].slice(0, 3)}</span>
+          </div>
+        `).join("")}
+      </div>
+      ${isCurrentYear ? `
+      <div style="border-top:0.5px solid var(--border); margin-top:16px; padding-top:14px;">
+        <div class="form-actions-row">
+          <p style="font-size:13px; font-weight:600; margin:0;">${MONTH_NAMES[currentMonthIdx]} - mês atual</p>
+          <button class="subtle" id="editGoalBtn" style="font-size:12px;">Editar meta</button>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:8px;"><span>Meta do mês</span><span>${formatMoney(target)}</span></div>
+        <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:8px;"><span>Recebido até agora</span><span>${formatMoney(receivedThisMonth)}</span></div>
+        <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:10px; font-weight:600;"><span>Falta para bater a meta</span><span style="color:var(--text-warning)">${formatMoney(Math.max(0, target - receivedThisMonth))}</span></div>
+        <div class="progress-track"><div class="progress-fill" style="width:${Math.min(100, pct)}%"></div></div>
+        <p class="note">${target > 0 ? `${pct}% da meta - ${pct >= 100 ? "meta batida" : pct >= 70 ? "mês dentro do esperado" : "mês fraco até agora"}` : "Nenhuma meta definida para este mês ainda."}</p>
+      </div>` : ""}
+    </div>
+
+    <div class="panel">
+      <h3>Atenção agora</h3>
       ${atencao.length === 0 ? `<p class="bell-empty">Nada atrasado ou pendente hoje.</p>` : `<div class="list">${atencao.map((e) => rowCardHtml(e, false)).join("")}</div>`}
     </div>
   `;
   bindPeriodNav(() => renderTab());
+  document.getElementById("prevYearBtn").addEventListener("click", () => { state.year -= 1; renderTab(); });
+  document.getElementById("nextYearBtn").addEventListener("click", () => { state.year += 1; renderTab(); });
+  const goalBtn = document.getElementById("editGoalBtn");
+  if (goalBtn) goalBtn.addEventListener("click", async () => {
+    const val = prompt("Meta de receita para " + MONTH_NAMES[currentMonthIdx] + ":", target || "");
+    if (val === null) return;
+    const num = Number(val.replace(",", "."));
+    if (!isNaN(num)) { await db.setGoal(ymKey, num); renderTab(); }
+  });
 }
 
 // ---------------- Row card (list item) ----------------
@@ -310,7 +401,7 @@ function rowCardHtml(e, editable = true) {
   const style = STATUS_STYLE[status];
   const isIncome = e.type === "receivable" || e.type === "rt";
   const projectLabel = e.projects?.name ? ` - ${e.projects.name}` : "";
-  const sub = `${e.category || ""}${e.installment_label ? " - " + e.installment_label : ""} - ${e.type === "receivable" || e.type === "rt" ? "previsto" : "vence"} ${formatDate(e.due_date)}${projectLabel}`;
+  const sub = `${e.category || ""}${e.installment_label ? " - " + e.installment_label : ""} - ${isIncome ? "previsto" : "vence"} ${formatDate(e.due_date)}${projectLabel}`;
   return `
     <div class="row-card" data-id="${e.id}">
       ${editable ? `<button class="check-circle ${e.paid ? "checked" : ""}" data-action="toggle" aria-label="Marcar como ${isIncome ? "recebido" : "pago"}">${icons.check}</button>` : `<span></span>`}
@@ -319,7 +410,7 @@ function rowCardHtml(e, editable = true) {
         <p class="sub">${escapeHtml(sub)}</p>
       </div>
       <span class="status-badge" style="background:${style.bg}; color:${style.fg};">${status}</span>
-      <p class="amount ${isIncome ? "income" : "expense"}">${formatMoney(e.amount)}</p>
+      <p class="amount ${e.paid ? "paid" : ""}">${formatMoney(e.amount)}</p>
       ${editable ? `
       <div class="row-actions">
         <button class="icon-btn" data-action="edit" aria-label="Editar">${icons.edit}</button>
@@ -340,7 +431,7 @@ function bindRowActions(container, entriesList, { onChanged }) {
     });
     row.querySelector('[data-action="edit"]')?.addEventListener("click", () => openEntryModal(entry.type, entry, onChanged));
     row.querySelector('[data-action="delete"]')?.addEventListener("click", async () => {
-      if (confirm("Excluir este lancamento?")) {
+      if (confirm("Excluir este lançamento?")) {
         await db.deleteEntry(id);
         onChanged();
       }
@@ -363,21 +454,21 @@ async function renderDespesas(el) {
     <div class="toolbar-row">
       <div class="subtabs" id="despesasSubtabs">
         <button data-sub="payable" class="${state.despesasSub === "payable" ? "active" : ""}">Contas a pagar</button>
-        <button data-sub="variable" class="${state.despesasSub === "variable" ? "active" : ""}">Gastos variaveis</button>
+        <button data-sub="variable" class="${state.despesasSub === "variable" ? "active" : ""}">Gastos variáveis</button>
       </div>
-      <button class="primary" id="addDespesaBtn">${icons.plus}&nbsp;${state.despesasSub === "payable" ? "Nova conta a pagar" : "Novo gasto variavel"}</button>
+      <div class="toolbar-right">
+        <div class="donut-mini" title="${escapeHtml(donut.titleText)}" style="${donut.style}"></div>
+        <button class="primary" id="addDespesaBtn">${icons.plus}&nbsp;${state.despesasSub === "payable" ? "Nova conta a pagar" : "Novo gasto variável"}</button>
+      </div>
     </div>
     ${periodNavHtml()}
     <div class="metrics-row cols-3" style="margin-top:14px;">
-      <div class="metric-card"><p class="label">Total do mes</p><p class="value">${formatMoneyShort(total)}</p></div>
-      <div class="metric-card"><p class="label">Ja pago</p><p class="value success">${formatMoneyShort(pago)}</p></div>
+      <div class="metric-card"><p class="label">Total do mês</p><p class="value">${formatMoneyShort(total)}</p></div>
+      <div class="metric-card"><p class="label">Já pago</p><p class="value success">${formatMoneyShort(pago)}</p></div>
       <div class="metric-card"><p class="label">Falta pagar</p><p class="value danger">${formatMoneyShort(falta)}</p></div>
     </div>
-    <div style="display:grid; grid-template-columns:1fr 150px; gap:14px; align-items:start;">
-      <div class="list" id="despesasList">
-        ${list.length === 0 ? `<p class="empty-state">Nenhum lancamento neste mes.</p>` : list.map((e) => rowCardHtml(e)).join("")}
-      </div>
-      <div class="chart-card"><p class="title">Por categoria</p><div class="donut" style="${donut.style}"></div><div class="legend">${donut.legend}</div></div>
+    <div class="list" id="despesasList">
+      ${list.length === 0 ? `<p class="empty-state">Nenhum lançamento neste mês.</p>` : list.map((e) => rowCardHtml(e)).join("")}
     </div>
   `;
   bindPeriodNav(() => renderTab());
@@ -402,18 +493,18 @@ async function renderReceber(el) {
   el.innerHTML = `
     <div class="toolbar-row">
       ${periodNavHtml()}
-      <button class="primary" id="addReceberBtn">${icons.plus}&nbsp;Novo lancamento</button>
+      <div class="toolbar-right">
+        <div class="donut-mini" title="${escapeHtml(donut.titleText)}" style="${donut.style}"></div>
+        <button class="primary" id="addReceberBtn">${icons.plus}&nbsp;Novo lançamento</button>
+      </div>
     </div>
     <div class="metrics-row cols-3">
       <div class="metric-card"><p class="label">Total previsto</p><p class="value">${formatMoneyShort(total)}</p></div>
-      <div class="metric-card"><p class="label">Ja recebido</p><p class="value success">${formatMoneyShort(recebido)}</p></div>
+      <div class="metric-card"><p class="label">Já recebido</p><p class="value success">${formatMoneyShort(recebido)}</p></div>
       <div class="metric-card"><p class="label">Falta receber</p><p class="value danger">${formatMoneyShort(falta)}</p></div>
     </div>
-    <div style="display:grid; grid-template-columns:1fr 150px; gap:14px; align-items:start;">
-      <div class="list" id="receberList">
-        ${list.length === 0 ? `<p class="empty-state">Nenhum lancamento neste mes.</p>` : list.map((e) => rowCardHtml(e)).join("")}
-      </div>
-      <div class="chart-card"><p class="title">Por cliente</p><div class="donut" style="${donut.style}"></div><div class="legend">${donut.legend}</div></div>
+    <div class="list" id="receberList">
+      ${list.length === 0 ? `<p class="empty-state">Nenhum lançamento neste mês.</p>` : list.map((e) => rowCardHtml(e)).join("")}
     </div>
   `;
   bindPeriodNav(() => renderTab());
@@ -486,12 +577,12 @@ async function renderProjectDetail(el) {
       <h3>DRE simplificado do projeto</h3>
       <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px;"><span>Receita (parcelas + RT)</span><span>${formatMoney(receita)}</span></div>
       <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px; color:var(--text-secondary);"><span>Despesas alocadas ao projeto</span><span>- ${formatMoney(custos)}</span></div>
-      <div style="display:flex; justify-content:space-between; font-size:14px; font-weight:700; border-top:0.5px solid var(--border); padding-top:8px;"><span>Resultado</span><span class="${resultado >= 0 ? "" : ""}" style="color:${resultado >= 0 ? "var(--text-success)" : "var(--text-danger)"}">${formatMoney(resultado)}</span></div>
-      <p class="note">Esse DRE organiza os numeros do projeto para facilitar a conversa com o contador, mas nao substitui a apuracao contabil oficial.</p>
+      <div style="display:flex; justify-content:space-between; font-size:14px; font-weight:700; border-top:0.5px solid var(--border); padding-top:8px;"><span>Resultado</span><span style="color:${resultado >= 0 ? "var(--text-success)" : "var(--text-danger)"}">${formatMoney(resultado)}</span></div>
+      <p class="note">Esse DRE organiza os números do projeto para facilitar a conversa com o contador, mas não substitui a apuração contábil oficial.</p>
     </div>
-    <p style="font-size:13px; font-weight:600; margin:0 0 8px;">Lancamentos do projeto</p>
+    <p style="font-size:13px; font-weight:600; margin:0 0 8px;">Lançamentos do projeto</p>
     <div class="list" id="projectEntriesList">
-      ${entries.length === 0 ? `<p class="empty-state">Nenhum lancamento neste projeto ainda.</p>` : entries.map((e) => {
+      ${entries.length === 0 ? `<p class="empty-state">Nenhum lançamento neste projeto ainda.</p>` : entries.map((e) => {
         const isIncome = e.type === "receivable" || e.type === "rt";
         return `
         <div class="row-card" data-id="${e.id}">
@@ -508,7 +599,7 @@ async function renderProjectDetail(el) {
   document.getElementById("backProjectsBtn").addEventListener("click", () => { state.currentProjectId = null; renderTab(); });
   document.getElementById("projectSelect").addEventListener("change", (e) => { state.currentProjectId = e.target.value; renderTab(); });
   document.getElementById("deleteProjectBtn").addEventListener("click", async () => {
-    if (confirm(`Excluir o projeto "${project.name}"? Os lancamentos ligados a ele ficam sem projeto vinculado.`)) {
+    if (confirm(`Excluir o projeto "${project.name}"? Os lançamentos ligados a ele ficam sem projeto vinculado.`)) {
       await db.deleteProject(project.id);
       state.currentProjectId = null;
       state.projects = await db.fetchProjects();
@@ -519,41 +610,43 @@ async function renderProjectDetail(el) {
 
 // ---------------- RTs ----------------
 async function renderRTs(el) {
-  const { from, to } = monthRange(state.date.getFullYear(), state.date.getMonth());
-  const entries = await db.fetchEntriesInRange(from, to);
-  const list = entries.filter((e) => e.type === "rt");
-  const totalPrevisto = sum(list);
+  const isOpenView = state.rtsView === "open";
+  let list;
+  if (isOpenView) {
+    const all = await db.fetchAllEntries();
+    list = all.filter((e) => e.type === "rt" && !e.paid).sort((a, b) => a.due_date.localeCompare(b.due_date));
+  } else {
+    const { from, to } = monthRange(state.date.getFullYear(), state.date.getMonth());
+    const entries = await db.fetchEntriesInRange(from, to);
+    list = entries.filter((e) => e.type === "rt");
+  }
+  const totalPrevisto = sum(list.filter((e) => !e.paid));
 
   el.innerHTML = `
     <div class="toolbar-row">
-      ${periodNavHtml()}
+      <div class="subtabs" id="rtsViewToggle">
+        <button data-view="month" class="${!isOpenView ? "active" : ""}">Este mês</button>
+        <button data-view="open" class="${isOpenView ? "active" : ""}">Todas em aberto</button>
+      </div>
       <button class="primary" id="addRTBtn">${icons.plus}&nbsp;Nova RT</button>
     </div>
-    <p style="font-size:13px; color:var(--text-secondary); margin:0 0 12px;">RT prevista no mes: <strong style="color:var(--text-primary)">${formatMoney(totalPrevisto)}</strong></p>
+    ${isOpenView ? "" : periodNavHtml()}
+    <p style="font-size:13px; color:var(--text-secondary); margin:12px 0;">${isOpenView ? "Total em aberto (todos os meses)" : "RT prevista no mês"}: <strong style="color:var(--text-primary)">${formatMoney(totalPrevisto)}</strong></p>
     <div class="list" id="rtsList">
-      ${list.length === 0 ? `<p class="empty-state">Nenhuma RT neste mes.</p>` : list.map((e) => rowCardHtml(e)).join("")}
+      ${list.length === 0 ? `<p class="empty-state">${isOpenView ? "Nenhuma RT em aberto no momento." : "Nenhuma RT neste mês."}</p>` : list.map((e) => rowCardHtml(e)).join("")}
     </div>
   `;
-  bindPeriodNav(() => renderTab());
+  if (!isOpenView) bindPeriodNav(() => renderTab());
+  document.querySelectorAll("#rtsViewToggle button").forEach((b) => {
+    b.addEventListener("click", () => { state.rtsView = b.dataset.view; renderTab(); });
+  });
   document.getElementById("addRTBtn").addEventListener("click", () => openRTModal(() => renderTab()));
   bindRowActions(document.getElementById("rtsList"), list, { onChanged: () => renderTab() });
 }
 
-// ---------------- RELATORIOS (DRE + Anual) ----------------
+// ---------------- DRE ----------------
 async function renderRelatorios(el) {
-  el.innerHTML = `
-    <div class="subtabs" id="relatoriosSubtabs">
-      <button data-sub="dre" class="${state.relatoriosSub === "dre" ? "active" : ""}">DRE</button>
-      <button data-sub="anual" class="${state.relatoriosSub === "anual" ? "active" : ""}">Anual</button>
-    </div>
-    <div id="relatoriosContent"></div>
-  `;
-  document.querySelectorAll("#relatoriosSubtabs button").forEach((b) => {
-    b.addEventListener("click", () => { state.relatoriosSub = b.dataset.sub; renderTab(); });
-  });
-  const content = document.getElementById("relatoriosContent");
-  if (state.relatoriosSub === "dre") await renderDRE(content);
-  else await renderAnual(content);
+  await renderDRE(el);
 }
 
 async function renderDRE(el) {
@@ -584,14 +677,14 @@ async function renderDRE(el) {
       </div>
     ` : ""}
     <div class="panel">
-      <h3>DRE simplificado ${state.dreScope === "projeto" && state.dreProjectId ? "- " + escapeHtml(state.projects.find(p=>p.id===state.dreProjectId)?.name || "") : "- escritorio"}</h3>
+      <h3>DRE simplificado ${state.dreScope === "projeto" && state.dreProjectId ? "- " + escapeHtml(state.projects.find(p=>p.id===state.dreProjectId)?.name || "") : "- escritório"}</h3>
       <div style="display:flex; flex-direction:column; gap:10px; font-size:14px;">
         <div style="display:flex; justify-content:space-between;"><span>Receita (parcelas + RT)</span><span style="font-weight:600;">${formatMoney(receita)}</span></div>
         <div style="display:flex; justify-content:space-between; color:var(--text-secondary);"><span>(-) Despesas fixas</span><span>${formatMoney(fixas)}</span></div>
-        <div style="display:flex; justify-content:space-between; color:var(--text-secondary);"><span>(-) Despesas variaveis</span><span>${formatMoney(variaveis)}</span></div>
-        <div style="display:flex; justify-content:space-between; border-top:0.5px solid var(--border); padding-top:10px; font-weight:700; font-size:16px;"><span>Resultado do mes</span><span style="color:${resultado >= 0 ? "var(--text-success)" : "var(--text-danger)"}">${formatMoney(resultado)}</span></div>
+        <div style="display:flex; justify-content:space-between; color:var(--text-secondary);"><span>(-) Despesas variáveis</span><span>${formatMoney(variaveis)}</span></div>
+        <div style="display:flex; justify-content:space-between; border-top:0.5px solid var(--border); padding-top:10px; font-weight:700; font-size:16px;"><span>Resultado do mês</span><span style="color:${resultado >= 0 ? "var(--text-success)" : "var(--text-danger)"}">${formatMoney(resultado)}</span></div>
       </div>
-      <p class="note">Esse DRE organiza os numeros para facilitar a apuracao de impostos com o contador, mas nao substitui a contabilidade oficial.</p>
+      <p class="note">Esse DRE organiza os números para facilitar a apuração de impostos com o contador, mas não substitui a contabilidade oficial.</p>
     </div>
   `;
   bindPeriodNav(() => renderTab());
@@ -600,85 +693,6 @@ async function renderDRE(el) {
   });
   const projSelect = document.getElementById("dreProjectSelect");
   if (projSelect) projSelect.addEventListener("change", (e) => { state.dreProjectId = e.target.value || null; renderTab(); });
-}
-
-async function renderAnual(el) {
-  const year = state.year;
-  const monthsData = [];
-  for (let m = 0; m < 12; m++) {
-    const { from, to } = monthRange(year, m);
-    const entries = await db.fetchEntriesInRange(from, to);
-    const recebido = sum(entries.filter((e) => e.type === "receivable" || e.type === "rt"));
-    const pago = sum(entries.filter((e) => e.type === "payable" || e.type === "variable"));
-    monthsData.push({ recebido, pago });
-  }
-  const totalRecebido = sum(monthsData.map((m) => ({ amount: m.recebido })));
-  const totalPago = sum(monthsData.map((m) => ({ amount: m.pago })));
-  const maxVal = Math.max(1, ...monthsData.flatMap((m) => [m.recebido, m.pago]));
-
-  const now = new Date();
-  const isCurrentYear = year === now.getFullYear();
-  const currentMonthIdx = now.getMonth();
-  const ymKey = yearMonthKey(year, currentMonthIdx);
-  let goal = null;
-  try { goal = await db.fetchGoal(ymKey); } catch { goal = null; }
-  const target = goal?.target_amount || 0;
-  const receivedThisMonth = isCurrentYear ? sum((await db.fetchEntriesInRange(...Object.values(monthRange(year, currentMonthIdx)))).filter((e) => (e.type === "receivable" || e.type === "rt") && e.paid)) : 0;
-  const pct = target > 0 ? Math.round((receivedThisMonth / target) * 100) : 0;
-
-  el.innerHTML = `
-    <div class="period-nav" style="margin-bottom:14px;">
-      <button class="icon-btn" id="prevYearBtn" aria-label="Ano anterior">${icons.chevronLeft}</button>
-      <span>${year}</span>
-      <button class="icon-btn" id="nextYearBtn" aria-label="Proximo ano">${icons.chevronRight}</button>
-    </div>
-    <div class="metrics-row cols-3">
-      <div class="metric-card"><p class="label">Recebido no ano</p><p class="value">${formatMoneyShort(totalRecebido)}</p></div>
-      <div class="metric-card"><p class="label">Pago no ano</p><p class="value">${formatMoneyShort(totalPago)}</p></div>
-      <div class="metric-card"><p class="label">Saldo acumulado</p><p class="value ${totalRecebido - totalPago >= 0 ? "success" : "danger"}">${formatMoneyShort(totalRecebido - totalPago)}</p></div>
-    </div>
-    <div class="panel">
-      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
-        <h3 style="margin:0;">Recebido vs pago por mes</h3>
-        <div style="display:flex; gap:10px; font-size:11px; color:var(--text-secondary);">
-          <span><span class="legend-dot" style="background:var(--accent-fg); display:inline-block;"></span> Recebido</span>
-          <span><span class="legend-dot" style="background:var(--border-strong); display:inline-block;"></span> Pago</span>
-        </div>
-      </div>
-      <div class="bars">
-        ${monthsData.map((m, i) => `
-          <div class="bar-col ${isCurrentYear && i === currentMonthIdx ? "current" : ""}">
-            <div class="bar-pair">
-              <div class="bar income" style="height:${Math.max(2, (m.recebido / maxVal) * 100)}%"></div>
-              <div class="bar expense" style="height:${Math.max(2, (m.pago / maxVal) * 100)}%"></div>
-            </div>
-            <span>${MONTH_NAMES[i].slice(0, 3)}</span>
-          </div>
-        `).join("")}
-      </div>
-    </div>
-    ${isCurrentYear ? `
-    <div class="panel">
-      <div class="form-actions-row">
-        <h3 style="margin:0;">${MONTH_NAMES[currentMonthIdx]} - mes atual</h3>
-        <button class="subtle" id="editGoalBtn" style="font-size:12px;">Editar meta</button>
-      </div>
-      <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:8px;"><span>Meta do mes</span><span>${formatMoney(target)}</span></div>
-      <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:8px;"><span>Recebido ate agora</span><span>${formatMoney(receivedThisMonth)}</span></div>
-      <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:10px; font-weight:600;"><span>Falta para bater a meta</span><span style="color:var(--text-warning)">${formatMoney(Math.max(0, target - receivedThisMonth))}</span></div>
-      <div class="progress-track"><div class="progress-fill" style="width:${Math.min(100, pct)}%"></div></div>
-      <p class="note">${target > 0 ? `${pct}% da meta - ${pct >= 100 ? "meta batida" : pct >= 70 ? "mes dentro do esperado" : "mes fraco ate agora"}` : "Nenhuma meta definida para este mes ainda."}</p>
-    </div>` : ""}
-  `;
-  document.getElementById("prevYearBtn").addEventListener("click", () => { state.year -= 1; renderTab(); });
-  document.getElementById("nextYearBtn").addEventListener("click", () => { state.year += 1; renderTab(); });
-  const goalBtn = document.getElementById("editGoalBtn");
-  if (goalBtn) goalBtn.addEventListener("click", async () => {
-    const val = prompt("Meta de receita para " + MONTH_NAMES[currentMonthIdx] + ":", target || "");
-    if (val === null) return;
-    const num = Number(val.replace(",", "."));
-    if (!isNaN(num)) { await db.setGoal(ymKey, num); renderTab(); }
-  });
 }
 
 // ================= MODALS =================
@@ -702,24 +716,24 @@ function closeModal() {
 }
 
 const CATEGORY_OPTIONS = {
-  payable: ["Fixa", "Cartao", "Financiamento", "Assinatura", "Outros"],
-  variable: ["Material", "Deslocamento", "Impressoes", "Escritorio", "Outros"],
+  payable: ["Fixa", "Cartão", "Financiamento", "Assinatura", "Outros"],
+  variable: ["Material", "Deslocamento", "Impressões", "Escritório", "Outros"],
   receivable: ["Projeto", "Outros"],
   rt: ["RT"],
 };
 
 function openEntryModal(type, entry, onSaved) {
   const isEdit = !!entry;
-  const titleMap = { payable: "conta a pagar", variable: "gasto variavel", receivable: "lancamento a receber", rt: "RT" };
+  const titleMap = { payable: "conta a pagar", variable: "gasto variável", receivable: "lançamento a receber", rt: "RT" };
   const cats = CATEGORY_OPTIONS[type] || ["Outros"];
   const projectOptions = state.projects.map((p) => `<option value="${p.id}" ${entry?.project_id === p.id ? "selected" : ""}>${escapeHtml(p.name)}</option>`).join("");
   const isRT = type === "rt";
 
-  modalShell(`${isEdit ? "Editar" : "Novo"} ${titleMap[type] || "lancamento"}`, `
+  modalShell(`${isEdit ? "Editar" : "Novo"} ${titleMap[type] || "lançamento"}`, `
     <form id="entryForm">
       <div class="form-field">
-        <label>Descricao</label>
-        <input type="text" id="f_description" required value="${escapeHtml(entry?.description || "")}" placeholder="Ex: Aluguel do escritorio" />
+        <label>Descrição</label>
+        <input type="text" id="f_description" required value="${escapeHtml(entry?.description || "")}" placeholder="Ex: Aluguel do escritório" />
       </div>
       ${isRT ? `
       <div class="form-field">
@@ -746,7 +760,7 @@ function openEntryModal(type, entry, onSaved) {
           <select id="f_project_id" ${isRT ? "required" : ""}><option value="">${isRT ? "Selecione" : "Sem projeto"}</option>${projectOptions}</select>
         </div>
       </div>
-      <button type="submit" class="primary modal-footer-btn">${isEdit ? "Salvar alteracoes" : "Criar lancamento"}</button>
+      <button type="submit" class="primary modal-footer-btn">${isEdit ? "Salvar alterações" : "Criar lançamento"}</button>
     </form>
   `);
 
@@ -788,7 +802,7 @@ function bindInstallments(container, totalInputId) {
     const totalTarget = Number(document.getElementById(totalInputId)?.value || 0);
     const totalEl = container.parentElement.querySelector(".installment-total");
     if (totalEl) {
-      totalEl.textContent = `Total das parcelas: ${formatMoney(total)}${totalTarget ? (Math.abs(total - totalTarget) < 0.01 ? " - bate com o valor total" : ` - valor total e ${formatMoney(totalTarget)}`) : ""}`;
+      totalEl.textContent = `Total das parcelas: ${formatMoney(total)}${totalTarget ? (Math.abs(total - totalTarget) < 0.01 ? " - bate com o valor total" : ` - valor total é ${formatMoney(totalTarget)}`) : ""}`;
       totalEl.classList.toggle("mismatch", totalTarget > 0 && Math.abs(total - totalTarget) >= 0.01);
     }
   }
@@ -814,22 +828,31 @@ function readInstallments(container) {
 function openProjectModal(onSaved) {
   modalShell("Novo projeto", `
     <form id="projectForm">
-      <div class="form-field"><label>Nome do projeto</label><input type="text" id="p_name" required placeholder="Residencia Almeida" /></div>
+      <div class="form-field"><label>Nome do projeto</label><input type="text" id="p_name" required placeholder="Residência Almeida" /></div>
       <div class="form-grid">
-        <div class="form-field"><label>Cliente</label><input type="text" id="p_client" placeholder="Familia Almeida" /></div>
+        <div class="form-field"><label>Cliente</label><input type="text" id="p_client" placeholder="Família Almeida" /></div>
         <div class="form-field"><label>Valor total do contrato</label><input type="number" step="0.01" id="p_total" required placeholder="18000" /></div>
       </div>
       <div class="panel" style="padding:14px;">
-        <div class="form-actions-row">
-          <h3 style="margin:0;">Parcelas (a receber)</h3>
-          <button type="button" class="subtle" id="addInstallmentBtn" style="font-size:12px;">${icons.plus} Adicionar</button>
+        <div class="subtabs" id="paymentTypeToggle" style="margin-bottom:14px;">
+          <button type="button" data-ptype="avista">À vista</button>
+          <button type="button" data-ptype="parcelado" class="active">Parcelado</button>
         </div>
-        <div id="installmentsContainer">
-          ${installmentRowHtml(1)}
+        <div id="avistaSection" class="hidden">
+          <div class="form-field"><label>Data de recebimento</label><input type="date" id="p_avista_date" value="${todayStr()}" /></div>
         </div>
-        <p class="installment-total"></p>
+        <div id="parceladoSection">
+          <div class="form-actions-row">
+            <h3 style="margin:0;">Parcelas (a receber)</h3>
+            <button type="button" class="subtle" id="addInstallmentBtn" style="font-size:12px;">${icons.plus} Adicionar</button>
+          </div>
+          <div id="installmentsContainer">
+            ${installmentRowHtml(1)}
+          </div>
+          <p class="installment-total"></p>
+        </div>
       </div>
-      <button type="submit" class="primary modal-footer-btn">Criar projeto e lancar parcelas</button>
+      <button type="submit" class="primary modal-footer-btn">Criar projeto e lançar parcelas</button>
     </form>
   `);
 
@@ -843,14 +866,32 @@ function openProjectModal(onSaved) {
     recalc();
   });
 
+  let paymentType = "parcelado";
+  document.querySelectorAll("#paymentTypeToggle button").forEach((b) => {
+    b.addEventListener("click", () => {
+      paymentType = b.dataset.ptype;
+      document.querySelectorAll("#paymentTypeToggle button").forEach((x) => x.classList.toggle("active", x === b));
+      document.getElementById("avistaSection").classList.toggle("hidden", paymentType !== "avista");
+      document.getElementById("parceladoSection").classList.toggle("hidden", paymentType !== "parcelado");
+    });
+  });
+
   document.getElementById("projectForm").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const installments = readInstallments(container);
-    if (installments.length === 0) { alert("Adicione ao menos uma parcela valida."); return; }
+    const totalValue = Number(document.getElementById("p_total").value || 0);
+    let installments;
+    if (paymentType === "avista") {
+      const date = document.getElementById("p_avista_date").value;
+      if (!date || !totalValue) { alert("Preencha o valor e a data de recebimento."); return; }
+      installments = [{ label: "À vista", amount: totalValue, due_date: date }];
+    } else {
+      installments = readInstallments(container);
+      if (installments.length === 0) { alert("Adicione ao menos uma parcela válida."); return; }
+    }
     const project = {
       name: document.getElementById("p_name").value.trim(),
       client: document.getElementById("p_client").value.trim(),
-      total_value: Number(document.getElementById("p_total").value || 0),
+      total_value: totalValue,
     };
     await db.createProjectWithInstallments(project, installments);
     state.projects = await db.fetchProjects();
@@ -876,7 +917,7 @@ function openRTModal(onSaved) {
         <div id="rtInstallmentsContainer">${installmentRowHtml(1)}</div>
         <p class="installment-total"></p>
       </div>
-      <button type="submit" class="primary modal-footer-btn">Cadastrar RT e lancar parcelas</button>
+      <button type="submit" class="primary modal-footer-btn">Cadastrar RT e lançar parcelas</button>
     </form>
   `);
 
@@ -893,7 +934,7 @@ function openRTModal(onSaved) {
   document.getElementById("rtForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const installments = readInstallments(container);
-    if (installments.length === 0) { alert("Adicione ao menos uma parcela valida."); return; }
+    if (installments.length === 0) { alert("Adicione ao menos uma parcela válida."); return; }
     const projectId = document.getElementById("rt_project").value;
     const projectName = state.projects.find((p) => p.id === projectId)?.name || "";
     await db.createRTWithInstallments({
